@@ -43,19 +43,22 @@ class RedditStoryGenerator:
 
     def gpt_summary_of_script(self, video_script: str) -> str:
         try:
-            completion = openai.chat.completions.create(
-                model="gpt-3.5-turbo-0125",
+            completion = self.video_editor.openrouter.chat.completions.create(
+                model="mistralai/mistral-7b-instruct:free",
                 temperature=0.25,
                 max_tokens=250,
                 messages=[
                     {"role": "user", "content": f"Summarize the following video script; it is very important that you keep it to one line. \n Script: {video_script}"}
-                ]
+                ],
+                extra_headers={
+                    "HTTP-Referer": "https://your-site.com",
+                    "X-Title": "Your App Name",
+                }
             )
-            logging.info("Script generated successfully.")
             return completion.choices[0].message.content
         except Exception as e:
             logging.error(f"Error generating script summary: {e}")
-            return ""  # Return an empty string on error
+            return ""
 
     async def create_reddit_question_clip(self, reddit_question: str, video_height: int = 720) -> tuple[TextClip, str]:
         try:
