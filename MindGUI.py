@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO)
 load_dotenv()
 
 # Load the reference JSON
-with open('src/json_2_video/tests/json2video_template_clean.json', 'r') as f:
+with open('src/json_2_video_engine/tests/json2video_template_clean.json', 'r') as f:
     reference_json = json.load(f)
 
 # Initialize the OpenAI client
