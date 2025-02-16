@@ -9,6 +9,8 @@ from pathlib import Path
 import uuid
 import re  # Added import for regular expression operations
 import json  # Added import for JSON operations
+from PIL import Image, ImageDraw, ImageFont
+import numpy as np
 
 from dotenv import load_dotenv
 
@@ -23,7 +25,56 @@ openai_api_key = os.getenv('OPENAI_API_KEY')
 class VideoEditor:
     def __init__(self):
         self.openai = OpenAI(api_key=openai_api_key)
+        self.openrouter = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.getenv("OPENROUTER_API_KEY")
+        )
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    def create_text_clip(self, text, fontsize=50, color='white', bg_color=None, font='Arial'):
+        """Create a text clip using Pillow instead of ImageMagick"""
+        try:
+            # Try to load the specified font
+            font_path = self.get_font_path(font)
+            if font_path:
+                font = ImageFont.truetype(font_path, fontsize)
+            else:
+                # Fallback to default font
+                font = ImageFont.load_default()
+                logging.warning(f"Font {font} not found, using default font")
+            
+            # Create a PIL image
+            bbox = font.getbbox(text)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            image = Image.new('RGBA', (text_width, text_height), bg_color or (0, 0, 0, 0))
+            draw = ImageDraw.Draw(image)
+            draw.text((0, 0), text, font=font, fill=color)
+            
+            # Convert PIL Image to numpy array for MoviePy
+            np_image = np.array(image)
+            
+            # Convert to MoviePy clip
+            return ImageClip(np_image)
+        except Exception as e:
+            logging.error(f"Error creating text clip: {e}")
+            return None
+
+    def get_font_path(self, font_name):
+        """Try to locate the font file"""
+        # Look for the font in the 'fonts' directory
+        font_path = os.path.join(self.base_dir, 'fonts', font_name)
+        if os.path.exists(font_path):
+            return font_path
+        
+        # Try system fonts
+        try:
+            from matplotlib.font_manager import findfont, FontProperties
+            return findfont(FontProperties(family=font_name))
+        except ImportError:
+            logging.warning("matplotlib not installed, using default font")
+        
+        return None
 
     def download_video(self, youtube_url):
         try:
@@ -73,45 +124,71 @@ class VideoEditor:
     # Create antoher class to handle ai generation
     async def generate_script(self, topic, prompt_template):
         try:
-            completion = self.openai.chat.completions.create(  # Async call to create chat completion
-                model="gpt-3.5-turbo-0125",
+            completion = self.openrouter.chat.completions.create(
+                model="mistralai/mistral-7b-instruct:free",
                 max_tokens=400,
-                response_format={ "type": "json_object" },
+                response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": f"{prompt_template['system_prompt']}"},
                     {"role": "user", "content": f"{prompt_template['user_prompt']} {topic}"}
-                ]
+                ],
+                extra_headers={
+                    "HTTP-Referer": "https://your-site.com",  # Replace with your site
+                    "X-Title": "Your App Name",  # Replace with your app name
+                }
             )
             logging.info("Script generated successfully.")
 
-            response_content = completion.choices[0].message.content  # Access the message content correctly
-
-            # Parse the response content as JSON
-            response_json = json.loads(response_content)
-            return response_json
-
-        except json.JSONDecodeError as json_err:
-            logging.error(f"Error decoding JSON: {json_err}")
-            return {}  # Return an empty dictionary on JSON decode error
+            response_content = completion.choices[0].message.content
+            
+            # Add JSON validation
+            try:
+                # Try to parse the response
+                response_json = json.loads(response_content)
+                
+                # Validate required fields
+                if not all(key in response_json for key in ['reddit_question', 'youtube_short_story']):
+                    logging.error("Response JSON missing required fields")
+                    return {
+                        'reddit_question': 'Error: Invalid response format',
+                        'youtube_short_story': 'Error: Invalid response format'
+                    }
+                    
+                return response_json
+                
+            except json.JSONDecodeError as json_err:
+                logging.error(f"Error decoding JSON: {json_err}")
+                # Return a default response if JSON is invalid
+                return {
+                    'reddit_question': f'Error: {str(json_err)}',
+                    'youtube_short_story': f'Error: {str(json_err)}'
+                }
+                
         except Exception as e:
-            logging.error(f"Error generating script: {e}")  # Log the error message
-            return {}  # Return an empty dictionary on error
+            logging.error(f"Error generating script: {e}")
+            return {
+                'reddit_question': f'Error: {str(e)}',
+                'youtube_short_story': f'Error: {str(e)}'
+            }
 
     async def gpt_summary_of_script(self, video_script: str) -> str:
         try:
-            completion = self.openai.chat.completions.create(
-                model="gpt-3.5-turbo-0125",
+            completion = self.openrouter.chat.completions.create(
+                model="mistralai/mistral-7b-instruct:free",
                 temperature=0.25,
                 max_tokens=250,
                 messages=[
                     {"role": "user", "content": f"Summarize the following video script; it is very important that you keep it to one line. \n Script: {video_script}"}
-                ]
+                ],
+                extra_headers={
+                    "HTTP-Referer": "https://your-site.com",
+                    "X-Title": "Your App Name",
+                }
             )
-            logging.info("Script generated successfully.")
             return completion.choices[0].message.content
         except Exception as e:
             logging.error(f"Error generating script summary: {e}")
-            return ""  # Return an empty string on error
+            return ""
     
     async def gpt_image_prompt_from_scene(self, scene, script_summary):
         try:
@@ -152,7 +229,7 @@ class VideoEditor:
             response_json = json.loads(completion.choices[0].message.content)
             return response_json["image_prompt"]
         except requests.exceptions.RequestException as e:
-            logging.error(f"Error calling OpenAI API: {e}")
+            logging.error(f"Error calling OpenRouter API: {e}")
             return scene  
         
     async def create_scenes_from_script(self, script):
@@ -354,9 +431,6 @@ class VideoEditor:
                 except Exception as e:
                     logging.error(f"Error deleting image {image_path}: {e}")
 
-    
-
 ## Pending stuff to do in this class:
 # - Separate audio from captions in the add_audio_and_captions_to_video method
 # - Render method separated from the add_images_to_video method
-

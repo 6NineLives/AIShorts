@@ -58,31 +58,23 @@ class RedditStoryGenerator:
             return ""  # Return an empty string on error
 
     async def create_reddit_question_clip(self, reddit_question: str, video_height: int = 720) -> tuple[TextClip, str]:
-        """Create a text clip for the Reddit question and generate its audio."""
         try:
-            # Generate audio for the Reddit question
-            reddit_question_audio_path: str = await self.video_editor.generate_voice(reddit_question)
-
-            reddit_question_audio_clip: AudioFileClip = AudioFileClip(reddit_question_audio_path)
-            reddit_question_audio_duration: float = reddit_question_audio_clip.duration
+            # Generate audio
+            reddit_question_audio_path = await self.video_editor.generate_voice(reddit_question)
+            reddit_question_audio_clip = AudioFileClip(reddit_question_audio_path)
+            reddit_question_audio_duration = reddit_question_audio_clip.duration
             reddit_question_audio_clip.close()
 
-            # Calculate text clip size based on video width
-            text_width = int((video_height * 9 / 16) * 0.7)  # 90% of video width after cropped to 9/16
-            text_height = int(text_width * 0.35)  # 30% of cropped video width
-
-            # Create a text clip for the Reddit question
-            reddit_question_text_clip = TextClip(
-                reddit_question,
-                fontsize=int(video_height * 0.03),  # 2.5% of video height for font size
+            # Create text clip using Pillow
+            text_clip = self.video_editor.create_text_clip(
+                text=reddit_question,
+                fontsize=int(video_height * 0.03),
                 color='black',
                 bg_color='white',
-                size=(text_width, text_height),  # Allow height to adjust automatically
-                method='caption',
-                align='center'
+                font='Arial'
             ).set_duration(reddit_question_audio_duration)
 
-            return reddit_question_text_clip, reddit_question_audio_path
+            return text_clip, reddit_question_audio_path
         except Exception as e:
             logging.error(f"Error creating Reddit question clip: {e}")
             return None, None

@@ -44,31 +44,23 @@ class ReadyMadeScriptGenerator:
             return ""  # Return an empty string on error
 
     async def create_hook_text_clip(self, hook: str, video_height: int = 720) -> tuple[TextClip, str]:
-        """Create a text clip for the hook and generate its audio."""
         try:
-            # Generate audio for the hook
-            hook_audio_path: str = await self.video_editor.generate_voice(hook)
-
-            hook_audio_clip: AudioFileClip = AudioFileClip(hook_audio_path)
-            hook_audio_duration: float = hook_audio_clip.duration
+            # Generate audio
+            hook_audio_path = await self.video_editor.generate_voice(hook)
+            hook_audio_clip = AudioFileClip(hook_audio_path)
+            hook_audio_duration = hook_audio_clip.duration
             hook_audio_clip.close()
 
-            # Calculate text clip size based on video width
-            text_width = int((video_height * 9 / 16) * 0.7)  # 90% of video width after cropped to 9/16
-            text_height = int(text_width * 0.35)  # 30% of cropped video width
-
-            # Create a text clip for the Reddit question
-            hook_text_clip = TextClip(
-                hook,
-                fontsize=int(video_height * 0.03),  # 2.5% of video height for font size
+            # Create text clip using Pillow
+            text_clip = self.video_editor.create_text_clip(
+                text=hook,
+                fontsize=int(video_height * 0.03),
                 color='black',
                 bg_color='white',
-                size=(text_width, text_height),  # Allow height to adjust automatically
-                method='caption',
-                align='center'
+                font='Arial'
             ).set_duration(hook_audio_duration)
 
-            return hook_text_clip, hook_audio_path
+            return text_clip, hook_audio_path
         except Exception as e:
             logging.error(f"Error creating hook clip: {e}")
             return None, None

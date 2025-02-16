@@ -32,13 +32,13 @@ from moviepy.audio.fx.all import audio_fadein, audio_fadeout
 from moviepy.video.fx.all import speedx
 
 
-openai_api_key = os.getenv("OPENAI_API_KEY")
-
-
 class TranslationEngine:
     def __init__(self):
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
-        self.openai_client = OpenAI(api_key=openai_api_key)
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.getenv("OPENROUTER_API_KEY")
+        )
         self.video_editor = VideoEditor()
         self.subtitle_generator = SubtitleGenerator()
 
@@ -54,6 +54,15 @@ class TranslationEngine:
             dict: A dictionary containing the status and the path to the translated video.
         """
         try:
+            # Ensure the downloads directory exists
+            downloads_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'downloads')
+            os.makedirs(downloads_dir, exist_ok=True)
+            os.chmod(downloads_dir, 0o777)  # Set permissions
+
+            # Proceed with video download
+            video_path = os.path.join(downloads_dir, 'video.mp4')
+            # Your video download logic here...
+
             # Extract audio from the video
             video = VideoFileClip(video_path)
             audio = video.audio
@@ -91,14 +100,12 @@ class TranslationEngine:
 
 
     async def _translate_subtitles(self, subtitles_path: str, target_language: str) -> List[pysrt.SubRipItem]:
-        """Translate each subtitle in the SRT file using OpenAI's API."""
+        """Translate each subtitle in the SRT file using OpenRouter's API."""
         try:
-            # Read subtitles from the file
             subs = pysrt.open(subtitles_path)
-            
             translated_subs = []
+            
             for i, sub in enumerate(subs):
-                # Get previous and next subtitle texts
                 prev_text = subs[i-1].text if i > 0 else ""
                 next_text = subs[i+1].text if i < len(subs) - 1 else ""
 
@@ -106,21 +113,23 @@ class TranslationEngine:
                     "current_translated_subtitle": ""
                 }'''
                 
-                # Translate the text with context
-                response = self.openai_client.chat.completions.create(
-                    model="gpt-3.5-turbo",
+                response = self.client.chat.completions.create(
+                    extra_headers={
+                        "HTTP-Referer": "https://your-site.com",
+                        "X-Title": "Your Site Name",
+                    },
+                    model="deepseek/deepseek-r1:free",
                     response_format={"type": "json_object"},
                     messages=[
                         {"role": "system", "content": f"You are a professional translator. Translate the current subtitle to {target_language}. Use the previous and next subtitles as context to ensure the translation is coherent. Answer in the JSON format: {json_response}"},
                         {"role": "user", "content": f"Previous subtitle: {prev_text}\nCurrent subtitle: {sub.text}\nNext subtitle: {next_text}"}
                     ]
                 )
-                response_json = response.choices[0].message.content
                 
-                # Parse the JSON response
+                response_json = response.choices[0].message.content
                 translated_sub_data = json.loads(response_json)
                 translated_text = translated_sub_data.get("current_translated_subtitle", "")
-                # Create a new SubRipItem with translated text
+                
                 translated_sub = pysrt.SubRipItem(
                     index=sub.index,
                     start=sub.start,
@@ -145,7 +154,7 @@ class TranslationEngine:
             
             for i, subtitle in enumerate(translated_subtitles):
                 speech_file_path = os.path.join(speech_file_dir, f'generated_speech_{i}.mp3')
-                response = self.openai_client.audio.speech.create(
+                response = self.client.audio.speech.create(
                     model="tts-1",
                     voice="echo",
                     input=subtitle.text
