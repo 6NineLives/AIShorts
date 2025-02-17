@@ -199,33 +199,30 @@ class ImageHandler:
             return []
 
     def refine_keyword_with_openai(self, keyword, video_context):
-        """Refine the keyword using OpenAI's ChatGPT 3.5 for better image search results."""
-
         try:
-            completion = self.openai.chat.completions.create(  # Async call to create chat completion
-                model="gpt-3.5-turbo",  # Updated model name
+            completion = self.openrouter.chat.completions.create(
+                model="mistralai/mistral-7b-instruct:free",
                 temperature=0.25,
-                messages = [
+                messages=[
                     {
                         'role': 'system',
-                        'content': 
-                            '''You are a query generation system designed to enhance video automation. "
-                            Your task is to take provided phrases and generate concise queries that will assist in finding appropriate images for the given scene.
-                            Always produce a short, clear query based on the original phrase and the context of the video.
-                            Example of ideal output: 'Sunset in California', 'Halloween costume', 'Friends meeting'.'''
+                        'content': '''You are a query generation system designed to enhance video automation...'''
                     },
                     {
                         'role': 'user',
                         'content': f'Original phrase: "{keyword}"\nVideo topic: {video_context}'
                     }
                 ],
-                max_tokens=200
+                extra_headers={
+                    "HTTP-Referer": "https://your-site.com",
+                    "X-Title": "Your App Name",
+                }
             )
             refined_keyword = completion.choices[0].message.content.strip()
             return refined_keyword
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Error calling OpenAI API: {e}")
-            return keyword  # Return the original keyword on error
+        except Exception as e:
+            logging.error(f"Error generating refined keyword: {e}")
+            return keyword
 
     def get_images_from_subtitles(self, subtitles_file_path, video_context, video_duration):
         """Fetch relevant images based on the subtitles and video duration."""

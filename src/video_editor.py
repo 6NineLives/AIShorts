@@ -31,7 +31,7 @@ class VideoEditor:
         )
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
 
-    def create_text_clip(self, text, fontsize=50, color='white', bg_color=None, font='Arial'):
+    def create_text_clip(self, text, fontsize=50, color='white', bg_color=None, font='Arial', video_width=1920, video_height=1080):
         """Create a text clip using Pillow instead of ImageMagick"""
         try:
             # Try to load the specified font
@@ -43,15 +43,49 @@ class VideoEditor:
                 font = ImageFont.load_default()
                 logging.warning(f"Font {font} not found, using default font")
             
-            # Create a PIL image
-            bbox = font.getbbox(text)
-            text_width = bbox[2] - bbox[0]
-            text_height = bbox[3] - bbox[1]
-            image = Image.new('RGBA', (text_width, text_height), bg_color or (0, 0, 0, 0))
-            draw = ImageDraw.Draw(image)
-            draw.text((0, 0), text, font=font, fill=color)
+            # Reduce font size
+            fontsize = int(fontsize * 0.7)  # 30% smaller
             
-            # Convert PIL Image to numpy array for MoviePy
+            # Split text into lines every 5 words
+            words = text.split()
+            lines = [' '.join(words[i:i+5]) for i in range(0, len(words), 5)]
+            
+            # Calculate text dimensions
+            line_height = int(fontsize * 1.2)
+            text_height = len(lines) * line_height
+            
+            # Add padding around the text
+            padding = 20
+            box_width = int(video_width * 0.8)  # 80% of video width
+            box_height = text_height + 2 * padding
+            
+            # Create image with transparent background
+            image = Image.new("RGBA", (box_width, box_height), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(image)
+            
+            # Add background box if specified
+            if bg_color:
+                draw.rounded_rectangle(
+                    [(0, 0), (box_width, box_height)],
+                    fill=bg_color,
+                    radius=15  # Rounded corners
+                )
+            
+            # Draw each line with proper spacing
+            for i, line in enumerate(lines):
+                # Calculate text width for centering
+                line_width = font.getlength(line)
+                x = (box_width - line_width) / 2
+                
+                # Draw text
+                draw.text(
+                    (x, padding + i * line_height),
+                    line,
+                    font=font,
+                    fill=color
+                )
+            
+            # Convert to numpy array
             np_image = np.array(image)
             
             # Convert to MoviePy clip
@@ -192,45 +226,29 @@ class VideoEditor:
     
     async def gpt_image_prompt_from_scene(self, scene, script_summary):
         try:
-            completion = self.openai.chat.completions.create( 
-                model="gpt-3.5-turbo",  # Updated model name
+            completion = self.openrouter.chat.completions.create(
+                model="mistralai/mistral-7b-instruct:free",
                 temperature=0.25,
-                messages = [
+                messages=[
                     {
                         'role': 'system',
-                        'content': """ You are a specialized prompt generation system for video automation, tasked with generating image prompts that are visually engaging and suited to the provided scene text. Focus on capturing vibrant, lively details to make each image compelling and relatable.
-
-                        **Guidelines:**
-                        1. Write concise prompts that prioritize the details in the scene text, adding any vivid or relevant elements to enhance the scene.
-                        2. Use specific sensory details (like lighting, atmosphere, or motion) to bring each image to life, avoiding overly corporate or static imagery.
-                        3. Keep prompts engaging by emphasizing emotions, actions, or vivid backgrounds that match the scene.
-                        4. Avoid including any text within the image; focus solely on describing the visual content.
-
-                        **Example outputs:**
-                        - "Three friends laughing and dancing on a beach at sunset in California, waves in the background"
-                        - "Kids in fun Halloween costumes, smiling and posing excitedly at a colorful McDonald's"
-                        - "Friends chatting and laughing in a lively bar, while a dramatic argument unfolds nearby" 
-
-
-                        **Output Format:**
-                        Return the result as a JSON object structured as follows:
-                        {
-                            "image_prompt": "image prompt here"
-                        }
-                        """
+                        'content': """You are a specialized prompt generation system for video automation..."""
                     },
                     {
                         'role': 'user',
                         'content': f'Scene script: "{scene}"\nScript summary: {script_summary}'
                     }
                 ],
-                max_tokens=200
+                extra_headers={
+                    "HTTP-Referer": "https://your-site.com",
+                    "X-Title": "Your App Name",
+                }
             )
             response_json = json.loads(completion.choices[0].message.content)
             return response_json["image_prompt"]
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Error calling OpenRouter API: {e}")
-            return scene  
+        except Exception as e:
+            logging.error(f"Error generating image prompt: {e}")
+            return scene
         
     async def create_scenes_from_script(self, script):
         system_prompt = """ You are a scene creation system for a video automation tool. Your task is to break down a given script into a sequence of concise, well-structured scenes to be used for generating images and audio in the video.
@@ -258,15 +276,19 @@ class VideoEditor:
             }
         """
         try:
-            completion = self.openai.chat.completions.create(
-                model="gpt-3.5-turbo",
+            completion = self.openrouter.chat.completions.create(
+                model="mistralai/mistral-7b-instruct:free",
                 temperature=0.25,
-                response_format={ "type": "json_object" },
+                response_format={"type": "json_object"},
                 max_tokens=2500,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Script: {script}"}
-                ]
+                ],
+                extra_headers={
+                    "HTTP-Referer": "https://your-site.com",
+                    "X-Title": "Your App Name",
+                }
             )
             response_json = json.loads(completion.choices[0].message.content)
             return response_json["scenes"]
