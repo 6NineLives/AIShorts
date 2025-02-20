@@ -46,31 +46,16 @@ class SubtitleGenerator:
             
             subtitles = []
             
-            # Process all segments, not just the first one
+            # Process all segments
             for segment in result['segments']:
-                current_words = []
-                subtitle_start_time = None
-                
-                for i, word_info in enumerate(segment['words']):
+                for word_info in segment['words']:
                     word_start_time = self.convert_seconds_to_srt_time(word_info['start'])
                     word_end_time = self.convert_seconds_to_srt_time(word_info['end'])
-
-                    if subtitle_start_time is None:
-                        subtitle_start_time = word_start_time
-
-                    current_words.append(word_info['word'].strip())
-
-                    if len(current_words) >= 2 or (i > 0 and word_start_time.ordinal - self.convert_seconds_to_srt_time(segment['words'][i-1]['end']).ordinal >= 600):
-                        formatted_text = " ".join(current_words)
-                        subtitles.append((subtitle_start_time, word_end_time, formatted_text))
-                        current_words = []
-                        subtitle_start_time = None
-
-                if current_words:
-                    formatted_text = " ".join(current_words)
-                    subtitles.append((subtitle_start_time, word_end_time, formatted_text))
-
-            logging.info(f"Generated {len(subtitles)} subtitles")
+                    
+                    # Create a subtitle for each word
+                    subtitles.append((word_start_time, word_end_time, word_info['word'].strip()))
+            
+            logging.info(f"Generated {len(subtitles)} word-by-word subtitles")
             return subtitles
         except Exception as e:
             logging.error(f"Error in speech-to-text transcription: {e}")

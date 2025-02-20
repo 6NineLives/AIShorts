@@ -7,8 +7,6 @@ from openai import OpenAI
 # Load environment variables from .env file
 load_dotenv()
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
 async def generate_voice(script):
     try:
         unique_id = uuid.uuid4()
@@ -16,13 +14,24 @@ async def generate_voice(script):
         os.makedirs(assets_dir, exist_ok=True)
         speech_file_path = os.path.join(assets_dir, f"voice_{unique_id}.mp3")
         
-        response = client.audio.speech.create(
-            model="tts-1",
-            voice="echo",
-            input=script
+        # Import and initialize ElevenLabs
+        from elevenlabs.client import ElevenLabs
+        from elevenlabs import save
+        
+        # Initialize client
+        client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
+        
+        # Generate speech
+        audio = client.generate(
+            text=script,
+            voice="flHkNRp1BlvT73UL6gyz",  # Your custom voice ID
+            model="eleven_multilingual_v2"
         )
-        response.stream_to_file(speech_file_path)
-        logging.info("Voice generated successfully.")
+        
+        # Save audio
+        save(audio, speech_file_path)
+        
+        logging.info("Voice generated successfully using ElevenLabs.")
         return speech_file_path
     except Exception as e:
         logging.error(f"Error generating voice: {e}")

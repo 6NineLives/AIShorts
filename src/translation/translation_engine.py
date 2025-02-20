@@ -150,16 +150,27 @@ class TranslationEngine:
             speech_file_dir = os.path.join(self.base_dir, '..', 'assets')
             os.makedirs(speech_file_dir, exist_ok=True)
             
+            # Import and initialize ElevenLabs
+            from elevenlabs.client import ElevenLabs
+            from elevenlabs import save
+            
+            # Initialize client
+            client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
+            
             audio_clips = []
             
             for i, subtitle in enumerate(translated_subtitles):
                 speech_file_path = os.path.join(speech_file_dir, f'generated_speech_{i}.mp3')
-                response = self.client.audio.speech.create(
-                    model="tts-1",
-                    voice="echo",
-                    input=subtitle.text
+                
+                # Generate speech with ElevenLabs
+                audio = client.generate(
+                    text=subtitle.text,
+                    voice="flHkNRp1BlvT73UL6gyz",  # Your custom voice ID
+                    model="eleven_multilingual_v2"
                 )
-                response.stream_to_file(speech_file_path)
+                
+                # Save audio
+                save(audio, speech_file_path)
                 
                 # Load the generated audio
                 audio_clip = AudioFileClip(speech_file_path)
@@ -183,8 +194,6 @@ class TranslationEngine:
 
                 # Set the start time for the audio clip
                 audio_clip = audio_clip.set_start(subtitle.start.seconds + subtitle.start.milliseconds / 1000)
-                
-                audio_clips.append(audio_clip)
                 
                 # Remove the temporary audio file
                 os.remove(speech_file_path)

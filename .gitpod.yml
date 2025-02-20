@@ -7,5 +7,8 @@
 tasks:
   - init: pip install -r requirements.txt
     command: python app.py
+      sudo apt-get update && sudo apt-get install -y imagemagick
+      sudo sed -i 's/<policy domain="path" rights="none" pattern="@\*"/>/<policy domain="path" rights="read|write" pattern="@\*"/>/' /etc/ImageMagick-6/policy.xml
+      sudo sed -i 's/<policy domain="path" rights="none" pattern="@\*"/>/<policy domain="path" rights="read|write" pattern="@\*"/>/' /etc/ImageMagick-7/policy.xml || true
 
 

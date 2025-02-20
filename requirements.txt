@@ -77,3 +77,4 @@ Werkzeug==3.0.4
 whisper==1.1.10
 youtube-dl==2021.12.17
 yt-dlp
+openai-whisper
