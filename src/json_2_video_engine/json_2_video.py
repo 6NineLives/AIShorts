@@ -3,8 +3,10 @@ import os
 import logging
 import uuid
 import math
+import asyncio
+from dotenv import load_dotenv
 
-from moviepy.editor import VideoFileClip, ImageClip, AudioFileClip, TextClip, CompositeVideoClip, CompositeAudioClip, ColorClip, concatenate_audioclips
+from moviepy.editor import VideoFileClip, ImageClip, AudioFileClip, TextClip, CompositeVideoClip, CompositeAudioClip, ColorClip, concatenate_audioclips, concatenate_videoclips
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -13,6 +15,9 @@ from .utils.llm_calls import generate_voice
 from .utils.images_generation import search_pexels_images, search_pixabay_images, download_image, generate_image_pollinations
 
 from ..captions.caption_handler import CaptionHandler
+
+# Load environment variables
+load_dotenv()
 
 class PyJson2Video:
 
@@ -25,30 +30,31 @@ class PyJson2Video:
         self.caption_handler = CaptionHandler()
         self.temp_files = []  # Add this to track all temporary files
 
-    async def convert(self):
+    async def convert(self) -> str:
         try:
+            # Initialize extra clip settings from .env
+            include_extra_clip = os.getenv('INCLUDE_EXTRA_CLIP', 'False').lower() == 'true'
+            extra_clip_path = os.getenv('EXTRA_CLIP_PATH') if include_extra_clip else None
+
+            # Validate the extra clip path
+            if include_extra_clip and not self._validate_extra_clip(extra_clip_path):
+                logger.warning("Skipping extra clip due to invalid path or file not found.")
+                extra_clip_path = None
+
             self._load_json()
             await self.parse_script()
             self.parse_videos()
             await self.parse_images()
             self.parse_audio()
             self.parse_text()
-            
-            extra_args = self.parse_extra_args()
-            
-            return await self._create_final_clip(extra_args)
+
+            # Pass extra clip settings to _create_final_clip
+            return await self._create_final_clip({
+                'extra_clip': extra_clip_path
+            })
         except Exception as e:
             logger.error(f"An error occurred during conversion: {str(e)}")
             raise
-        finally:
-            # Clean up all temporary files
-            for temp_file in self.temp_files:
-                try:
-                    if os.path.exists(temp_file):
-                        os.remove(temp_file)
-                        logger.debug(f"Removed temporary file: {temp_file}")
-                except OSError as e:
-                    logger.warning(f"Failed to remove temporary file {temp_file}: {e}")
 
     def _load_json(self):
         try:
@@ -337,7 +343,7 @@ class PyJson2Video:
             logger.error(f"Error parsing extra arguments: {str(e)}")
             raise
 
-    async def _create_final_clip(self, extra_args:dict) -> str:
+    async def _create_final_clip(self, extra_args: dict) -> str:
         temp_files = []  # Track temporary files for cleanup
         try:
             resolution = extra_args.get('resolution', {'width': 1920, 'height': 1080})
@@ -354,7 +360,6 @@ class PyJson2Video:
             # Create a blank background clip if no video clips exist
             if not self.video_clips:
                 logger.warning("No video clips found, creating blank background clip")
-                # Calculate duration from audio clips or use default
                 duration = max([clip.end for clip in self.audio_clips]) if self.audio_clips else 10
                 blank_clip = ColorClip(
                     size=(resolution['width'], resolution['height']),
@@ -363,19 +368,15 @@ class PyJson2Video:
                 )
                 self.video_clips.append(blank_clip)
             
-            # Process captions for all script audio clips
+            # Process captions
             if captions_settings.get('enabled', False):
                 script_audio_clips = [clip for clip in self.audio_clips if hasattr(clip, 'filename')]
                 if script_audio_clips:
-                    # Concatenate all audio clips
                     final_audio = concatenate_audioclips(script_audio_clips)
-                    
-                    # Save the concatenated audio temporarily
                     temp_audio_path = os.path.join(os.path.dirname(__file__), 'assets', f"temp_combined_audio_{uuid.uuid4()}.wav")
-                    temp_files.append(temp_audio_path)  # Track for cleanup
+                    temp_files.append(temp_audio_path)
                     final_audio.write_audiofile(temp_audio_path)
                     
-                    # Generate captions
                     subtitles_path, subtitle_clips = await self.caption_handler.process(
                         temp_audio_path,
                         captions_settings.get('color', 'white'),
@@ -385,10 +386,11 @@ class PyJson2Video:
                         resolution['width']
                     )
                     if subtitles_path:
-                        temp_files.append(subtitles_path)  # Track for cleanup
+                        temp_files.append(subtitles_path)
                     
                     self.video_clips.extend(subtitle_clips)
             
+            # Create main video clip
             final_clip = CompositeVideoClip(
                 self.video_clips,
                 size=(resolution['width'], resolution['height']),
@@ -399,6 +401,28 @@ class PyJson2Video:
             if self.audio_clips:
                 final_audio = CompositeAudioClip(self.audio_clips)
                 final_clip = final_clip.set_audio(final_audio)
+            
+            # Handle end clip
+            end_clip_path = extra_args.get('end_clip')
+            if end_clip_path and self._validate_extra_clip(end_clip_path):
+                try:
+                    end_clip = VideoFileClip(end_clip_path)
+                    logger.info(f"End clip duration: {end_clip.duration}")
+                    
+                    # Resize end clip to match main video dimensions
+                    end_clip = end_clip.resize(
+                        width=resolution['width'],
+                        height=resolution['height']
+                    )
+                    
+                    # Create a new composite clip with the end clip appended
+                    final_clip = concatenate_videoclips([final_clip, end_clip])
+                    temp_files.append(end_clip_path)
+                    logger.info(f"End clip added successfully. New total duration: {final_clip.duration}")
+                except Exception as e:
+                    logger.error(f"Error processing end clip: {str(e)}")
+            else:
+                logger.warning("No valid end clip provided or end clip validation failed")
             
             # Write the final video file
             final_clip.write_videofile(
@@ -458,6 +482,64 @@ class PyJson2Video:
                     return item.get('start_time', 'voice_start_time')
 
         raise ValueError(f"Unable to determine {time_key} for: {time_value}")
+
+    def _validate_extra_clip(self, extra_clip_path: str) -> bool:
+        """
+        Validate the extra clip path.
+        
+        Args:
+            extra_clip_path (str): Path to the extra clip.
+            
+        Returns:
+            bool: True if the path is valid and the file exists, False otherwise.
+        """
+        if not extra_clip_path:
+            logger.warning("Extra clip path is empty.")
+            return False
+        
+        if not os.path.exists(extra_clip_path):
+            logger.warning(f"Extra clip path not found: {extra_clip_path}")
+            return False
+        
+        if not extra_clip_path.lower().endswith('.mp4'):
+            logger.warning(f"Invalid extra clip format. Only MP4 files are supported: {extra_clip_path}")
+            return False
+        
+        return True
+
+async def generate_video(self, video_path_or_url: str = '', 
+                         video_path: str = '', 
+                         video_url: str = '', 
+                         video_script: str = '',
+                         video_hook: str = '',
+                         captions_settings: dict = {},
+                         add_images: bool = True) -> dict:
+    """
+    Generate a video based on the provided topic or ready-made script.
+
+    Args:
+        video_path_or_url (str): 'video_path' or 'video_url', depending on which one is provided.
+        video_path (str): The path of the main video if provided.
+        video_url (str): The URL of the video to download.
+        video_script (str): The script of the video.
+        video_hook (str): The hook for the video.
+        captions_settings (dict): The settings for the captions. (font, color, etc)
+        add_images (bool): Whether to add images to the video.
+
+    Returns:
+        dict: A dictionary with the status of the video generation and a message.
+    """
+    try:
+        # Call the convert method
+        await self.convert()
+
+        return {"status": "success", "message": "Video generated successfully."}
+    except Exception as e:
+        logger.error(f"Error generating video: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+# Run the function
+asyncio.run(generate_video())
 
 
 

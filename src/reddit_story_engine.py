@@ -159,9 +159,9 @@ class RedditStoryGenerator:
             story_audio_length: float = story_audio_clip.duration
         
             # Calculate video times to cut clips
-            max_start_time: float = background_video_length - story_audio_length - reddit_question_audio_duration
-            start_time: float = random.uniform(0, max_start_time)
-            end_time: float = start_time + reddit_question_audio_duration + story_audio_length
+            max_start_time = min(background_video_length - story_audio_length - reddit_question_audio_duration, 56)
+            start_time = random.uniform(0, max_start_time)
+            end_time = start_time + reddit_question_audio_duration + story_audio_length
             
             """ Cut video once """
             cut_video_path: str = self.video_editor.cut_video(video_path, start_time, end_time)

@@ -1,7 +1,7 @@
 import os
 import logging
 import requests
-from moviepy.editor import VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip, ImageClip
+from moviepy.editor import VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip, ImageClip, concatenate_videoclips
 from openai import OpenAI
 import pysrt
 from yt_dlp import YoutubeDL
@@ -9,7 +9,7 @@ from pathlib import Path
 import uuid
 import re  # Added import for regular expression operations
 import json  # Added import for JSON operations
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageColor
 import numpy as np
 
 from dotenv import load_dotenv
@@ -50,25 +50,41 @@ class VideoEditor:
             words = text.split()
             lines = [' '.join(words[i:i+5]) for i in range(0, len(words), 5)]
             
-            # Calculate text dimensions
-            line_height = int(fontsize * 1.2)
+            # Increase line height multiplier from 1.2 to 1.5
+            line_height = int(fontsize * 1.5)  # Increased from 1.2 to 1.5
+            
             text_height = len(lines) * line_height
             
-            # Add padding around the text
-            padding = 20
-            box_width = int(video_width * 0.8)  # 80% of video width
+            # Add more padding around the text
+            padding = 30  # Increased from 20
+            box_width = video_width - 2 * padding  # Reduce width by margins
             box_height = text_height + 2 * padding
             
             # Create image with transparent background
             image = Image.new("RGBA", (box_width, box_height), (0, 0, 0, 0))
             draw = ImageDraw.Draw(image)
             
-            # Add background box if specified
+            # Handle background color
             if bg_color:
+                # If it's a color name, convert to RGB
+                if isinstance(bg_color, str) and not bg_color.startswith('#'):
+                    try:
+                        bg_color = ImageColor.getrgb(bg_color) + (128,)  # Add 50% transparency
+                    except ValueError:
+                        bg_color = (255, 255, 255, 128)  # Default to white with transparency
+                # If it's a hex color, convert to RGBA
+                elif isinstance(bg_color, str) and bg_color.startswith('#'):
+                    bg_color = bg_color.lstrip('#')
+                    bg_color = tuple(int(bg_color[i:i+2], 16) for i in (0, 2, 4)) + (128,)
+                # If it's a tuple, ensure it has transparency
+                elif isinstance(bg_color, tuple):
+                    if len(bg_color) == 3:
+                        bg_color = bg_color + (128,)
+                
                 draw.rounded_rectangle(
                     [(0, 0), (box_width, box_height)],
                     fill=bg_color,
-                    radius=15  # Rounded corners
+                    radius=15
                 )
             
             # Draw each line with proper spacing
@@ -89,7 +105,8 @@ class VideoEditor:
             np_image = np.array(image)
             
             # Convert to MoviePy clip
-            return ImageClip(np_image)
+            text_clip = ImageClip(np_image)
+            return text_clip.set_position(('center', 'center'))  # Will automatically respect the margins
         except Exception as e:
             logging.error(f"Error creating text clip: {e}")
             return None
@@ -141,19 +158,28 @@ class VideoEditor:
         if not os.path.exists(video_path):
             logging.error(f"Video file does not exist, {video_path}")
             return
+        
         try:
+            clip = VideoFileClip(video_path)
+            
+            # Ensure the cut doesn't exceed the video duration
+            end_time = min(end_time, clip.duration)
+            
+            # Cut exactly at the script-specified end time
+            cut_clip = clip.subclip(start_time, end_time)
+            
+            # Write the output
             unique_id = uuid.uuid4()
             assets_dir = os.path.join(self.base_dir, '..', 'assets')
             os.makedirs(assets_dir, exist_ok=True)
             output_path = os.path.join(assets_dir, f"cut_video_{unique_id}.mp4")
-            
-            clip = VideoFileClip(video_path)
-            cut_clip = clip.subclip(start_time, end_time)
             cut_clip.write_videofile(output_path)
-            logging.info("Video cut successfully.")
+            
+            logging.info(f"Video cut from {start_time} to {end_time} successfully.")
             return output_path
         except Exception as e:
             logging.error(f"Error cutting video: {e}")
+            return None
 
     # Create antoher class to handle ai generation
     async def generate_script(self, topic, prompt_template):
@@ -410,35 +436,82 @@ class VideoEditor:
         
         return CompositeVideoClip(clips)
 
-    def render_final_video(self, final_clip) -> str:
-        """Render the final video with all components added."""
-        unique_id = uuid.uuid4()
-        result_dir = os.path.abspath(os.path.join(self.base_dir, '../result'))
-        os.makedirs(result_dir, exist_ok=True)
-        output_path = os.path.join(result_dir, f"final_video_{unique_id}.mp4")
-        
-        # Ensure even dimensions
-        width, height = final_clip.w, final_clip.h
-        if width % 2 != 0:
-            width -= 1
-        if height % 2 != 0:
-            height -= 1
-        
-        final_clip = final_clip.resize(newsize=(width, height))
-        
-        final_clip.write_videofile(
-            output_path,
-            codec='libx264',
-            preset='veryfast',
-            ffmpeg_params=['-crf', '10', '-pix_fmt', 'yuv420p'],
-            audio_codec='aac',
-            audio_bitrate='128k',
-            fps=30
-
-        )
-        
-        logging.info("Final video rendered successfully.")
-        return output_path
+    def render_final_video(self, final_clip, end_clip_path: str = None) -> str:
+        try:
+            # Hardcoded end clip path for testing
+            end_clip_path = "/workspace/turboreel-GUI-v1/assets/end_clip.mp4"
+            
+            # Maximum total duration including end clip
+            max_total_duration = 56  # 56 seconds for main content
+            end_clip_duration = 3  # 3 seconds for end clip
+            
+            # Adjust main clip duration if needed
+            if final_clip.duration > max_total_duration:
+                final_clip = final_clip.subclip(0, max_total_duration)
+                logging.warning(f"Main clip duration reduced to {max_total_duration} seconds to accommodate end clip")
+            
+            unique_id = uuid.uuid4()
+            result_dir = os.path.abspath(os.path.join(self.base_dir, '../result'))
+            os.makedirs(result_dir, exist_ok=True)
+            output_path = os.path.join(result_dir, f"final_video_{unique_id}.mp4")
+            
+            # Handle end clip if provided
+            if end_clip_path:
+                try:
+                    # Validate end clip path
+                    if not os.path.exists(end_clip_path):
+                        logging.warning(f"End clip path does not exist: {end_clip_path}")
+                    elif not end_clip_path.lower().endswith('.mp4'):
+                        logging.warning(f"End clip must be an MP4 file: {end_clip_path}")
+                    else:
+                        end_clip = VideoFileClip(end_clip_path)
+                        
+                        # Validate end clip duration
+                        if end_clip.duration <= 0:
+                            logging.warning(f"End clip has invalid duration: {end_clip.duration}")
+                        else:
+                            # Resize end clip to match main video dimensions
+                            end_clip = end_clip.resize(
+                                width=final_clip.w,
+                                height=final_clip.h
+                            )
+                            
+                            # Ensure end clip is exactly 3 seconds
+                            if end_clip.duration > end_clip_duration:
+                                end_clip = end_clip.subclip(0, end_clip_duration)
+                            
+                            # Concatenate main video and end clip
+                            final_clip = concatenate_videoclips([final_clip, end_clip])
+                            logging.info(f"End clip added successfully. New total duration: {final_clip.duration}")
+                except Exception as e:
+                    logging.error(f"Error processing end clip: {str(e)}", exc_info=True)
+            else:
+                logging.info("No end clip path provided")
+            
+            # Ensure even dimensions
+            width, height = final_clip.w, final_clip.h
+            if width % 2 != 0:
+                width -= 1
+            if height % 2 != 0:
+                height -= 1
+            
+            final_clip = final_clip.resize(newsize=(width, height))
+            
+            final_clip.write_videofile(
+                output_path,
+                codec='libx264',
+                preset='veryfast',
+                ffmpeg_params=['-crf', '10', '-pix_fmt', 'yuv420p'],
+                audio_codec='aac',
+                audio_bitrate='128k',
+                fps=30
+            )
+            
+            logging.info("Final video rendered successfully.")
+            return output_path
+        except Exception as e:
+            logging.error(f"Error rendering final video: {str(e)}", exc_info=True)
+            raise
     
     def cleanup_files(self, file_paths, image_paths=None):
         """Delete temporary files and generated images to clean up the workspace."""
