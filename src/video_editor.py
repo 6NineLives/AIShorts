@@ -436,82 +436,96 @@ class VideoEditor:
         
         return CompositeVideoClip(clips)
 
-    def render_final_video(self, final_clip, end_clip_path: str = None) -> str:
+    def render_final_video(self, video_clip, add_end_clip=True, topic=None):
         try:
-            # Hardcoded end clip path for testing
-            end_clip_path = "/workspace/turboreel-GUI-v1/assets/end_clip.mp4"
+            # Generate output file name based on topic
+            if topic:
+                topic = topic.lower().replace(" ", "_")
+                topic = re.sub(r'[^\w\-_]', '', topic)  # Remove special chars
+            else:
+                topic = "final_video"
             
-            # Maximum total duration including end clip
-            max_total_duration = 56  # 56 seconds for main content
-            end_clip_duration = 3  # 3 seconds for end clip
+            output_dir = os.path.join(self.base_dir, '..', 'output')
+            os.makedirs(output_dir, exist_ok=True)
             
-            # Adjust main clip duration if needed
-            if final_clip.duration > max_total_duration:
-                final_clip = final_clip.subclip(0, max_total_duration)
-                logging.warning(f"Main clip duration reduced to {max_total_duration} seconds to accommodate end clip")
+            # Find next available filename
+            counter = 1
+            while True:
+                output_filename = f"clipgen_{topic}_{counter}.mp4" if counter > 1 else f"clipgen_{topic}.mp4"
+                output_path = os.path.join(output_dir, output_filename)
+                if not os.path.exists(output_path):
+                    break
+                counter += 1
+
+            # Set mobile dimensions (720x1280)
+            mobile_width = 720
+            mobile_height = 1280
             
-            unique_id = uuid.uuid4()
-            result_dir = os.path.abspath(os.path.join(self.base_dir, '../result'))
-            os.makedirs(result_dir, exist_ok=True)
-            output_path = os.path.join(result_dir, f"final_video_{unique_id}.mp4")
+            # Resize the main clip to mobile dimensions
+            video_clip = video_clip.resize(height=mobile_height)
             
-            # Handle end clip if provided
-            if end_clip_path:
-                try:
-                    # Validate end clip path
-                    if not os.path.exists(end_clip_path):
-                        logging.warning(f"End clip path does not exist: {end_clip_path}")
-                    elif not end_clip_path.lower().endswith('.mp4'):
-                        logging.warning(f"End clip must be an MP4 file: {end_clip_path}")
-                    else:
+            # Crop if necessary to maintain 9:16 aspect ratio
+            if video_clip.size[0] > mobile_width:
+                video_clip = video_clip.crop(x_center=video_clip.size[0]/2, width=mobile_width)
+        
+            # Set lower frame rate (e.g., 24 fps instead of 30)
+            video_clip = video_clip.set_fps(24)
+        
+            if add_end_clip:
+                # Check multiple possible locations for the end clip
+                possible_end_clip_paths = [
+                    os.path.join(self.base_dir, 'assets', 'end_clip.mp4'),
+                    os.path.join(self.base_dir, '..', 'assets', 'end_clip.mp4'),
+                    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'assets', 'end_clip.mp4')
+                ]
+                
+                end_clip_path = None
+                for path in possible_end_clip_paths:
+                    if os.path.exists(path):
+                        end_clip_path = path
+                        break
+                
+                if end_clip_path:
+                    try:
                         end_clip = VideoFileClip(end_clip_path)
                         
-                        # Validate end clip duration
-                        if end_clip.duration <= 0:
-                            logging.warning(f"End clip has invalid duration: {end_clip.duration}")
-                        else:
-                            # Resize end clip to match main video dimensions
-                            end_clip = end_clip.resize(
-                                width=final_clip.w,
-                                height=final_clip.h
-                            )
-                            
-                            # Ensure end clip is exactly 3 seconds
-                            if end_clip.duration > end_clip_duration:
-                                end_clip = end_clip.subclip(0, end_clip_duration)
-                            
-                            # Concatenate main video and end clip
-                            final_clip = concatenate_videoclips([final_clip, end_clip])
-                            logging.info(f"End clip added successfully. New total duration: {final_clip.duration}")
-                except Exception as e:
-                    logging.error(f"Error processing end clip: {str(e)}", exc_info=True)
+                        # Resize end clip to match mobile dimensions
+                        end_clip = end_clip.resize(height=mobile_height)
+                        if end_clip.size[0] > mobile_width:
+                            end_clip = end_clip.crop(x_center=end_clip.size[0]/2, width=mobile_width)
+                        
+                        # Use concatenate_videoclips with method="compose"
+                        final_clip = concatenate_videoclips([video_clip, end_clip], method="compose")
+                        logging.info(f"End clip added successfully. New total duration: {final_clip.duration}")
+                    except Exception as e:
+                        logging.error(f"Error adding end clip: {e}")
+                        final_clip = video_clip
+                else:
+                    logging.warning("End clip not found. Using original video.")
+                    final_clip = video_clip
             else:
-                logging.info("No end clip path provided")
+                final_clip = video_clip
             
-            # Ensure even dimensions
-            width, height = final_clip.w, final_clip.h
-            if width % 2 != 0:
-                width -= 1
-            if height % 2 != 0:
-                height -= 1
-            
-            final_clip = final_clip.resize(newsize=(width, height))
-            
+            # Optimize encoding settings with the new frame rate
             final_clip.write_videofile(
                 output_path,
                 codec='libx264',
-                preset='veryfast',
-                ffmpeg_params=['-crf', '10', '-pix_fmt', 'yuv420p'],
                 audio_codec='aac',
-                audio_bitrate='128k',
-                fps=30
+                preset='ultrafast',
+                bitrate='1500k',
+                threads=4,
+                ffmpeg_params=[
+                    '-pix_fmt', 'yuv420p',
+                    '-movflags', '+faststart',
+                    '-crf', '28'
+                ]
             )
-            
             logging.info("Final video rendered successfully.")
+            
             return output_path
         except Exception as e:
-            logging.error(f"Error rendering final video: {str(e)}", exc_info=True)
-            raise
+            logging.error(f"Error rendering final video: {e}")
+            return None
     
     def cleanup_files(self, file_paths, image_paths=None):
         """Delete temporary files and generated images to clean up the workspace."""

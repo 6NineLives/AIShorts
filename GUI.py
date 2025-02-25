@@ -45,6 +45,30 @@ def generate_video_ready_made(video_source, video_hook, video_file, video_url, v
         logger.error(traceback.format_exc())
         return {"status": "error", "message": str(e)}
 
+def generate_videos_batch(video_source, video_file, video_url, video_topics_text, add_images):
+    try:
+        video_path = video_file.name if video_file else None
+        
+        # Parse the topics from the text input (one topic per line)
+        video_topics = [topic.strip() for topic in video_topics_text.split('\n') if topic.strip()]
+        
+        if not video_topics:
+            return {"status": "error", "message": "No topics provided. Please enter at least one topic."}
+        
+        params = {
+            "video_path_or_url": video_source,
+            "video_path": video_path,
+            "video_url": video_url,
+            "video_topics": video_topics,
+            "add_images": add_images
+        }
+        
+        result = asyncio.run(reddit_story_generator.generate_videos_batch(**params))
+        return result
+    except Exception as e:
+        logger.error(traceback.format_exc())
+        return {"status": "error", "message": str(e)}
+
 with gr.Blocks() as iface:
     gr.Markdown("# TurboReel Video Generator")
     gr.Image("public/turboreel_logo.png", label="TurboReel Logo", width="full", height=60)
@@ -86,6 +110,26 @@ with gr.Blocks() as iface:
             ready_made_download_btn = gr.File(label="Download Generated Video", visible=False)
             ready_made_submit_btn = gr.Button("Generate Ready-Made Script Video")
 
+        with gr.TabItem("Batch Reddit Videos"):
+            gr.Markdown("Generate multiple Reddit story videos from a single source video.")
+            
+            with gr.Row():
+                batch_video_source = gr.Radio(["video_path", "video_url"], label="Video Source")
+            
+            with gr.Group():
+                batch_video_file = gr.File(label="Select File", visible=False, file_types=["video"])
+                batch_video_url = gr.Textbox(label="YouTube URL", visible=False)
+            
+            batch_video_topics = gr.Textbox(
+                label="Video Topics (one per line)", 
+                lines=5, 
+                placeholder="Enter one topic per line. Each topic will generate a separate video."
+            )
+            batch_add_images = gr.Checkbox(label="Add Images", value=True)
+            batch_output = gr.Textbox(label="Result")
+            batch_download_btn = gr.File(label="Download Generated Videos", visible=False)
+            batch_submit_btn = gr.Button("Generate Batch Videos")
+
     def update_visibility(video_src):
         return (
             gr.update(visible=video_src == "video_path"),
@@ -104,6 +148,12 @@ with gr.Blocks() as iface:
         outputs=[ready_made_video_file, ready_made_video_url]
     )
 
+    batch_video_source.change(
+        fn=update_visibility,
+        inputs=[batch_video_source],
+        outputs=[batch_video_file, batch_video_url]
+    )
+
     def process_result(result):
         if isinstance(result, str):
             try:
@@ -114,6 +164,39 @@ with gr.Blocks() as iface:
         if result["status"] == "success":
             output_message = f"Status: {result['status']}\nMessage: {result['message']}\nOutput Path: {result['output_path']}"
             return output_message, gr.update(visible=False), gr.update(value=result['output_path'], visible=True)
+        else:
+            return f"Status: {result['status']}\nMessage: {result['message']}", gr.update(visible=False), None
+
+    def process_batch_result(result):
+        if isinstance(result, str):
+            try:
+                result = eval(result)
+            except:
+                return {"status": "error", "message": result}, gr.update(visible=False), None
+
+        if result["status"] == "success":
+            # Format the output message
+            output_message = f"Status: {result['status']}\nMessage: {result['message']}\n\nIndividual Results:\n"
+            
+            # Add details for each video
+            for i, video_result in enumerate(result.get('results', [])):
+                topic = video_result.get('topic', f'Topic {i+1}')
+                status = video_result.get('status', 'unknown')
+                message = video_result.get('message', 'No message')
+                output_path = video_result.get('output_path', 'No output path')
+                
+                output_message += f"\n{i+1}. Topic: {topic}\n   Status: {status}\n   Message: {message}\n   Path: {output_path}\n"
+            
+            # Create a list of successful video paths for download
+            successful_videos = [r.get('output_path') for r in result.get('results', []) 
+                                if r.get('status') == 'success' and 'output_path' in r]
+            
+            if successful_videos:
+                # For simplicity, we'll just provide the first successful video for download
+                # In a real implementation, you might want to zip all videos or provide multiple download buttons
+                return output_message, gr.update(visible=False), gr.update(value=successful_videos[0], visible=True)
+            else:
+                return output_message, gr.update(visible=False), None
         else:
             return f"Status: {result['status']}\nMessage: {result['message']}", gr.update(visible=False), None
 
@@ -135,6 +218,16 @@ with gr.Blocks() as iface:
         process_result,
         inputs=ready_made_output,
         outputs=[ready_made_output, ready_made_submit_btn, ready_made_download_btn]
+    )
+
+    batch_submit_btn.click(
+        generate_videos_batch,
+        inputs=[batch_video_source, batch_video_file, batch_video_url, batch_video_topics, batch_add_images],
+        outputs=batch_output
+    ).then(
+        process_batch_result,
+        inputs=batch_output,
+        outputs=[batch_output, batch_submit_btn, batch_download_btn]
     )
 
 if __name__ == "__main__":

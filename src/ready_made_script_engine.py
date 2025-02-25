@@ -26,6 +26,52 @@ class ReadyMadeScriptGenerator:
         self.video_editor: VideoEditor = VideoEditor()
         self.image_handler: ImageHandler = ImageHandler(pexels_api_key, openai_api_key)
         self.caption_handler: CaptionHandler = CaptionHandler()
+        self.server_info = self.load_server_info()
+
+    def load_server_info(self):
+        try:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            info_path = os.path.join(current_dir, '..', 'prompt_templates', 'info.yaml')
+            with open(info_path, 'r') as file:
+                return yaml.safe_load(file)
+        except Exception as e:
+            logging.error(f"Error loading server info: {e}")
+            return None
+
+    async def generate_script_from_info(self, topic: str = None):
+        if not self.server_info:
+            return None
+            
+        # Create a dynamic prompt based on the topic
+        prompt = f"""
+        Create a fresh and engaging script for a Minecraft server advertisement. 
+        Use the following server information as a guide:
+
+        Server Name: {self.server_info['server_info']['name']}
+        Tagline: {self.server_info['server_info']['tagline']}
+        Key Features: {', '.join(self.server_info['server_info']['key_features'])}
+        Gameplay Experience: {', '.join(self.server_info['server_info']['gameplay_experience'])}
+        Technical Details: {self.server_info['server_info']['technical_specs']['performance']}
+
+        The script should:
+        - Be 100-150 words
+        - Focus on the topic: {topic if topic else 'general server features'}
+        - Use relevant information from the server guide
+        - Be exciting and engaging
+        - Include a strong call to action
+        """
+        
+        try:
+            completion = self.video_editor.openrouter.chat.completions.create(
+                model="mistralai/mistral-7b-instruct:free",
+                temperature=0.7,
+                max_tokens=300,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return completion.choices[0].message.content
+        except Exception as e:
+            logging.error(f"Error generating script: {e}")
+            return None
 
     def gpt_summary_of_script(self, video_script: str) -> str:
         try:
@@ -119,8 +165,9 @@ class ReadyMadeScriptGenerator:
                 return {"status": "error", "message": "Either video_path or video_url must be provided."}
 
             if not video_script:
-                logging.error("The video script should not be null.")
-                return {"status": "error", "message": "The video script should not be null."}
+                video_script = await self.generate_script_from_info()
+                if not video_script:
+                    return {"status": "error", "message": "Failed to generate script from server info"}
             
             if len(video_script) > 1300:
                 logging.error("The video script should not be longer than 1300 characters.")
@@ -222,13 +269,22 @@ class ReadyMadeScriptGenerator:
                 story_video.set_start(hook_audio_duration)
             ])
 
-            final_video_output_path = self.video_editor.render_final_video(combined_clips)
+            final_clip = CompositeVideoClip([
+                combined_clips,
+                TextClip("End of video", fontsize=50, color='white', bg_color='black', font='Arial').set_position(('center', 'center')).set_duration(1)
+            ])
+
+            output_path = await self.video_editor.render_final_video(
+                final_clip,
+                add_end_clip=True,
+                topic=video_script[:50]  # Use first 50 chars of script as topic
+            )
             
             # Cleanup: Ensure temporary files are removed
             self.video_editor.cleanup_files([story_audio_path, cut_video_path, story_subtitles_path, hook_audio_path], story_image_paths)
             
-            logging.info(f"FINAL OUTPUT PATH: {final_video_output_path}")
-            return {"status": "success", "message": "Video generated successfully.", "output_path": final_video_output_path}
+            logging.info(f"FINAL OUTPUT PATH: {output_path}")
+            return {"status": "success", "message": "Video generated successfully.", "output_path": output_path}
         
         except Exception as e:
             logging.error(f"Error in video generation: {e}")

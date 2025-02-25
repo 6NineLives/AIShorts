@@ -4,6 +4,7 @@ import pysrt
 import uuid
 import whisper
 from whisper.utils import get_writer
+import re
 
 from .utils import convert_seconds_to_srt_time
 
@@ -52,8 +53,11 @@ class SubtitleGenerator:
                     word_start_time = self.convert_seconds_to_srt_time(word_info['start'])
                     word_end_time = self.convert_seconds_to_srt_time(word_info['end'])
                     
+                    # Apply text corrections
+                    corrected_word = self.process_text_corrections(word_info['word'].strip())
+                    
                     # Create a subtitle for each word
-                    subtitles.append((word_start_time, word_end_time, word_info['word'].strip()))
+                    subtitles.append((word_start_time, word_end_time, corrected_word))
             
             logging.info(f"Generated {len(subtitles)} word-by-word subtitles")
             return subtitles
@@ -93,11 +97,14 @@ class SubtitleGenerator:
             current_words = []
             subtitle_start_time = None
 
-            for i, word_info in enumerate(transcript.words):
+            for word_info in transcript.words:
                 word_start_time = self.convert_seconds_to_srt_time(word_info.start)
                 word_end_time = self.convert_seconds_to_srt_time(word_info.end)
-
-                previous_word_end = self.convert_seconds_to_srt_time(transcript.words[i - 1].end)
+                
+                # Apply text corrections
+                corrected_word = self.process_text_corrections(word_info.word.strip())
+                
+                current_words.append(corrected_word)
 
                 if subtitle_start_time is None:
                     subtitle_start_time = word_start_time
@@ -187,3 +194,23 @@ class SubtitleGenerator:
         except Exception as e:
             logging.error(f"Error adding captions to video: {e}")
             return []
+
+    def process_text_corrections(self, text):
+        # Split text into words while preserving punctuation
+        words = re.findall(r'\w+|\W+', text)
+        
+        # Process each word
+        corrected_words = []
+        for word in words:
+            # Fix 6b6t variations (case insensitive)
+            if re.match(r'^6b[^a-zA-Z]*$', word, re.IGNORECASE):
+                word = '6B6T'
+            
+            # Remove commas and spaces from numbers
+            if any(char.isdigit() for char in word):
+                word = re.sub(r'[,\s]', '', word)
+            
+            corrected_words.append(word)
+        
+        # Reconstruct the text while preserving original spacing/punctuation
+        return ''.join(corrected_words)

@@ -159,9 +159,9 @@ class RedditStoryGenerator:
             story_audio_length: float = story_audio_clip.duration
         
             # Calculate video times to cut clips
-            max_start_time = min(background_video_length - story_audio_length - reddit_question_audio_duration, 56)
+            max_start_time = max(0, background_video_length - 60)  # Ensure we have at least some video
             start_time = random.uniform(0, max_start_time)
-            end_time = start_time + reddit_question_audio_duration + story_audio_length
+            end_time = min(background_video_length, start_time + reddit_question_audio_duration + story_audio_length)
             
             """ Cut video once """
             cut_video_path: str = self.video_editor.cut_video(video_path, start_time, end_time)
@@ -206,7 +206,7 @@ class RedditStoryGenerator:
                 story_video.set_start(reddit_question_audio_duration)
             ])
 
-            final_video_output_path = self.video_editor.render_final_video(combined_clips)
+            final_video_output_path = self.video_editor.render_final_video(combined_clips, add_end_clip=True)
             
             # Cleanup: Ensure temporary files are removed
             self.video_editor.cleanup_files([story_audio_path, cut_video_path, story_subtitles_path, reddit_question_audio_path], story_image_paths)
@@ -221,3 +221,84 @@ class RedditStoryGenerator:
             # Close all clips
             for clip in clips_to_close:
                 clip.close()
+
+    async def generate_videos_batch(self, 
+                                   video_path_or_url: str = '', 
+                                   video_path: str = '', 
+                                   video_url: str = '', 
+                                   video_topics: list = [],
+                                   captions_settings: dict = {},
+                                   add_images: bool = True
+                                   ) -> dict:
+        """Generate multiple videos based on the provided topics using the same source video.
+
+        Args:
+            video_path_or_url (str): 'video_path' or 'video_url', depending on which one is provided.
+            video_path (str): The path of the video if provided.
+            video_url (str): The URL of the video to download.
+            video_topics (list): List of topics for generating multiple videos.
+            captions_settings (dict): The settings for the captions. (font, color, etc)
+            add_images (bool): Whether to add images to the videos.
+
+        Returns:
+            dict: A dictionary with the status of the batch video generation and a message.
+        """
+        try:
+            if not video_path_or_url:
+                raise ValueError("video_path_or_url cannot be empty.")
+
+            if not video_path and not video_url:
+                raise ValueError("Either video_path or video_url must be provided.")
+
+            if not video_topics or not isinstance(video_topics, list) or len(video_topics) == 0:
+                raise ValueError("video_topics must be a non-empty list.")
+            
+            # Download or get video once
+            video_path: str = video_path if video_path_or_url == 'video_path' else self.video_editor.download_video(video_url)
+            if not video_path:
+                logging.error("Failed to download video.")
+                return {"status": "error", "message": "No video path provided."}
+            
+            # Load prompt template once
+            current_dir: str = os.path.dirname(os.path.abspath(__file__))   
+            prompt_template_path: str = os.path.join(current_dir, '..', 'prompt_templates', 'reddit_thread.yaml')
+            if not os.path.exists(prompt_template_path):
+                logging.error(f"Prompt template file {prompt_template_path} not found.")
+                raise FileNotFoundError(f"Prompt template file {prompt_template_path} not found.")
+            prompt_template: str = load_prompt(prompt_template_path)
+            
+            # Process each topic and generate videos
+            results = []
+            for topic in video_topics:
+                logging.info(f"Processing topic: {topic}")
+                
+                # Generate video for this topic
+                result = await self.generate_video(
+                    video_path_or_url='video_path',  # Always use the local path since we've already downloaded
+                    video_path=video_path,
+                    video_url='',  # Empty since we're using the local path
+                    video_topic=topic,
+                    captions_settings=captions_settings,
+                    add_images=add_images
+                )
+                
+                # Add topic to result for reference
+                result['topic'] = topic
+                results.append(result)
+                
+                # Log progress
+                logging.info(f"Completed video for topic: {topic}")
+            
+            # Summarize results
+            success_count = sum(1 for r in results if r['status'] == 'success')
+            error_count = len(results) - success_count
+            
+            return {
+                "status": "success" if success_count > 0 else "error",
+                "message": f"Batch processing completed. {success_count} videos generated successfully, {error_count} failed.",
+                "results": results
+            }
+        
+        except Exception as e:
+            logging.error(f"Error in batch video generation: {e}")
+            return {"status": "error", "message": f"Error in batch video generation: {str(e)}"}
