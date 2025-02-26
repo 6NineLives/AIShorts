@@ -41,27 +41,63 @@ class ReadyMadeScriptGenerator:
     async def generate_script_from_info(self, topic: str = None):
         if not self.server_info:
             return None
-            
-        # Create a dynamic prompt based on the topic
-        prompt = f"""
-        Create a fresh and engaging script for a Minecraft server advertisement. 
-        Use the following server information as a guide:
-
-        Server Name: {self.server_info['server_info']['name']}
-        Tagline: {self.server_info['server_info']['tagline']}
-        Key Features: {', '.join(self.server_info['server_info']['key_features'])}
-        Gameplay Experience: {', '.join(self.server_info['server_info']['gameplay_experience'])}
-        Technical Details: {self.server_info['server_info']['technical_specs']['performance']}
-
-        The script should:
-        - Be 100-150 words
-        - Focus on the topic: {topic if topic else 'general server features'}
-        - Use relevant information from the server guide
-        - Be exciting and engaging
-        - Include a strong call to action
-        """
+        
+        # Load paragraph template
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        paragraph_path = os.path.join(current_dir, '..', 'prompt_templates', 'paragraph.yaml')
         
         try:
+            # Load paragraph content
+            with open(paragraph_path, 'r') as file:
+                paragraph_content = file.read()
+                
+                # Split into sentences and select random 200 words
+                sentences = [s.strip() for s in paragraph_content.split('.') if s.strip()]
+                start_index = random.randint(0, len(sentences) - 1)
+                selected_text = []
+                word_count = 0
+                
+                for i in range(start_index, len(sentences)):
+                    words = sentences[i].split()
+                    if word_count + len(words) > 200:
+                        break
+                    selected_text.append(sentences[i])
+                    word_count += len(words)
+                
+                paragraph_template = '. '.join(selected_text) + '.'
+                
+            # Extract key info from server_info
+            server_name = self.server_info['server_info']['name']
+            tagline = self.server_info['server_info']['tagline']
+            key_features = ', '.join(self.server_info['server_info']['key_features'])
+            gameplay_exp = ', '.join(self.server_info['server_info']['gameplay_experience'])
+            tech_details = self.server_info['server_info']['technical_specs']['performance']
+            
+            # Create dynamic prompt
+            prompt = f"""
+            Create a fresh and engaging script for a Minecraft server advertisement. 
+            Use the following information as a guide:
+
+            Server Name: {server_name}
+            Tagline: {tagline}
+            Key Features: {key_features}
+            Gameplay Experience: {gameplay_exp}
+            Technical Details: {tech_details}
+
+            Paragraph Template: {paragraph_template}
+
+            The script should:
+            - Be 100-150 words
+            - Focus on the topic: {topic if topic else 'general server features'}
+            - Combine information from both the server info and paragraph template
+            - Highlight how the server's features enhance the {topic} experience
+            - Mention Java/Bedrock compatibility
+            - Emphasize the server's capacity and performance
+            - Include a strong call to action
+            - Maintain a consistent and engaging tone
+            """
+
+            # Generate script
             completion = self.video_editor.openrouter.chat.completions.create(
                 model="mistralai/mistral-7b-instruct:free",
                 temperature=0.7,
@@ -69,6 +105,7 @@ class ReadyMadeScriptGenerator:
                 messages=[{"role": "user", "content": prompt}]
             )
             return completion.choices[0].message.content
+        
         except Exception as e:
             logging.error(f"Error generating script: {e}")
             return None
@@ -269,22 +306,13 @@ class ReadyMadeScriptGenerator:
                 story_video.set_start(hook_audio_duration)
             ])
 
-            final_clip = CompositeVideoClip([
-                combined_clips,
-                TextClip("End of video", fontsize=50, color='white', bg_color='black', font='Arial').set_position(('center', 'center')).set_duration(1)
-            ])
-
-            output_path = await self.video_editor.render_final_video(
-                final_clip,
-                add_end_clip=True,
-                topic=video_script[:50]  # Use first 50 chars of script as topic
-            )
+            final_video_output_path = self.video_editor.render_final_video(combined_clips)
             
             # Cleanup: Ensure temporary files are removed
             self.video_editor.cleanup_files([story_audio_path, cut_video_path, story_subtitles_path, hook_audio_path], story_image_paths)
             
-            logging.info(f"FINAL OUTPUT PATH: {output_path}")
-            return {"status": "success", "message": "Video generated successfully.", "output_path": output_path}
+            logging.info(f"FINAL OUTPUT PATH: {final_video_output_path}")
+            return {"status": "success", "message": "Video generated successfully.", "output_path": final_video_output_path}
         
         except Exception as e:
             logging.error(f"Error in video generation: {e}")
@@ -293,3 +321,5 @@ class ReadyMadeScriptGenerator:
             # Close all clips
             for clip in clips_to_close:
                 clip.close()
+
+
